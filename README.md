@@ -18,7 +18,7 @@ This script offers a comprehensive framework for analyzing Meta Ads performance 
 
 ---
 ## Key Links
-*[Get Started Document](https://docs.google.com/document/d/1TlWfs3no8iMvu-gHG9pxNhIMX2JOOJWJVOPQtM5tLxE/edit?usp=sharing)
+*[Get Started Document](https://docs.google.com/document/d/1TlWfs3no8iMvu-gHG9pxNhIMX2JOOJWJVOPQtM5tLxE/edit?usp=sharing)  
 *[Video Walkthrough Of Tool](https://highcampflasks.neetorecord.com/watch/77b3a72aba0e88855fa4)  
 *[Base Tool Spreadsheet Template](https://docs.google.com/spreadsheets/d/1_iONm4-WlSOJ5cySHrshIwoHKGIF7nXrNkBwmwKePFE/edit?usp=sharing)
 
