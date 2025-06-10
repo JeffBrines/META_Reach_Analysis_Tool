@@ -15,8 +15,8 @@ This script offers a comprehensive framework for analyzing Meta Ads performance 
 
 ---
 ## Key Links
-[Video Walkthrough Of Tool](https://highcampflasks.neetorecord.com/watch/77b3a72aba0e88855fa4)
-[Base tool spreadsheet template](https://docs.google.com/spreadsheets/d/1_iONm4-WlSOJ5cySHrshIwoHKGIF7nXrNkBwmwKePFE/edit?usp=sharing)
+*[Video Walkthrough Of Tool](https://highcampflasks.neetorecord.com/watch/77b3a72aba0e88855fa4)  
+*[Base Tool Spreadsheet Template](https://docs.google.com/spreadsheets/d/1_iONm4-WlSOJ5cySHrshIwoHKGIF7nXrNkBwmwKePFE/edit?usp=sharing)
 
 ## Key Features
 
@@ -47,7 +47,7 @@ This script offers a comprehensive framework for analyzing Meta Ads performance 
 
 ## How to Use (Workflow)
 
-1.  **Initial Setup**: On first use, run **'META Reach Tool > Set/Update Access Token'** from the menu and enter a valid long-lived user access token. For security, this will store your API token in 'PropertiesService'.
+1.  **Initial Setup**: On first use validate with your google account then run **'META Reach Tool > Set/Update Access Token'** from the menu and enter a valid long-lived user access token. For security, this will store your API token in 'PropertiesService'.
 2.  **Configure Report**: Fill out the parameters on the **'Setup'** sheet:
     * Ad Account ID (formatted: `act_XXXXXXXXXXXX`)
     * Start/End Date
