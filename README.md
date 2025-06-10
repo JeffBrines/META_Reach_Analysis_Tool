@@ -4,6 +4,9 @@
 
 This tool, **v2.2**, was developed by Kevin Luby ([@luby_k](https://x.com/luby_k))/[LinkedIn](https://www.linkedin.com/in/kevin-luby-70b62445/), Director of Ecom at High Camp Flasks. It was developed with the assistance of Gemini 2.5 Pro. 
 
+**License**  
+This project is licensed under the GNU GPLv3 License - see the [LICENSE](https://github.com/jokicpony/META_Reach_Analysis_Tool/blob/main/LICENSE) file for details.
+
 ---
 ## CREATOR NOTE: 
 This tool was 100% vibe coded with Gemini 2.5 Pro. While I'm an above average technical person, I don't know how to write code from scratch, or 'check the work' of the LLM that wrote this script. I did work with it to ensure some level of security (see API token below). This script doesn't do anything groundbreaking. It just makes calls to the META Marketing Insights API. That said...
