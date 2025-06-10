@@ -14,6 +14,9 @@ This tool was 100% vibe coded with Gemini 2.5 Pro. While I'm an above average te
 This script offers a comprehensive framework for analyzing Meta Ads performance by directly pulling data from the Marketing API. It generates a detailed report that combines metrics from specific time intervals (e.g., weekly) with overall cumulative growth metrics.
 
 ---
+## Key Links
+[Video Walkthrough Of Tool](https://highcampflasks.neetorecord.com/watch/77b3a72aba0e88855fa4)
+[Base tool spreadsheet template](https://docs.google.com/spreadsheets/d/1_iONm4-WlSOJ5cySHrshIwoHKGIF7nXrNkBwmwKePFE/edit?usp=sharing)
 
 ## Key Features
 
