@@ -1,0 +1,329 @@
+// --- SCRIPT PROPERTIES & CONSTANTS ---
+const META_GRAPH_API_VERSION = "v20.0";
+const SUCCESS_COLOR = '#d9ead3'; // Light Green
+const ERROR_COLOR = '#f4cccc';   // Light Red
+const PROGRESS_COLOR = '#fce5cd'; // Light Orange
+
+// ===================================================================================
+// 1. UI & MENU SETUP
+// ===================================================================================
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('META Reach Tool')
+    .addItem('1. Get Campaigns with Spend', 'getCampaignsWithSpend')
+    .addItem('2. Run Analysis', 'runAnalysis')
+    .addSeparator()
+    .addItem('Set/Update Access Token', 'showTokenPrompt')
+    .addToUi();
+}
+
+
+// ===================================================================================
+// 2. MAIN ROUTER & LOGIC FUNCTIONS
+// ===================================================================================
+
+/**
+ * Main "router" function. Reads the scope and analysis type and calls the correct logic.
+ */
+function runAnalysis() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const settingsSheet = ss.getSheetByName('Setup');
+  const statusCell = settingsSheet.getRange('B10');
+
+  try {
+    const analysisScope = settingsSheet.getRange('B7').getValue();
+    const analysisType = settingsSheet.getRange('B6').getValue();
+    
+    statusCell.setValue(`Starting: ${analysisType}...`).setBackground(PROGRESS_COLOR);
+
+    let lookbackDays;
+    switch (analysisType) {
+      case 'Daily':
+        lookbackDays = 1;
+        break;
+      case '7-Day Interval':
+        lookbackDays = 7;
+        break;
+      case '28-Day Interval':
+        lookbackDays = 28;
+        break;
+      default:
+        throw new Error("Please select a valid Analysis Type in cell B6.");
+    }
+    
+    if (analysisScope === 'All Campaigns') {
+      performAccountLevelAnalysis(lookbackDays);
+    } else if (analysisScope === 'Specific Campaign') {
+      performCampaignLevelAnalysis(lookbackDays);
+    } else {
+      throw new Error("Please select a valid Analysis Scope in cell B7.");
+    }
+
+  } catch (e) {
+    ui.alert(`An error occurred: ${e.message}`);
+    statusCell.setValue('Error!').setBackground(ERROR_COLOR);
+  }
+}
+
+/**
+ * Performs analysis at the ACCOUNT LEVEL using discrete time intervals.
+ */
+function performAccountLevelAnalysis(lookbackDays) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const settingsSheet = ss.getSheetByName('Setup');
+  const outputSheet = ss.getSheetByName('DATA_reachTool_flatTable_Output');
+  const statusCell = settingsSheet.getRange('B10');
+  const adAccountId = settingsSheet.getRange('B2').getValue();
+  const overallStartDate = new Date(settingsSheet.getRange('B4').getValue());
+  const overallEndDate = new Date(settingsSheet.getRange('B5').getValue());
+
+  if (!outputSheet) {
+    throw new Error("Could not find the output sheet named 'DATA_reachTool_flatTable_Output'. Please check the sheet name.");
+  }
+
+  outputSheet.clearContents();
+  const headers = [['Start Date', 'End Date', 'Campaign ID', 'Campaign Name', 'Period Spend', 'Period Reach', 'Period Impressions', 'Period Frequency', 'Period CPmR', 'Period CPM', 'Rolling Reach', 'Cumulative Impressions', 'Rolling Frequency', 'Incremental Reach', 'CPiM']];
+  outputSheet.getRange('A1:O1').setValues(headers).setFontWeight('bold'); // Expanded to O columns
+
+  let previousRollingReach = 0;
+
+  for (let loopStartDate = new Date(overallStartDate); loopStartDate <= overallEndDate; loopStartDate.setDate(loopStartDate.getDate() + lookbackDays)) {
+    const periodStartDate = new Date(loopStartDate);
+    let periodEndDate = new Date(loopStartDate);
+    periodEndDate.setDate(periodEndDate.getDate() + lookbackDays - 1);
+
+    if (periodEndDate > overallEndDate) {
+      periodEndDate.setTime(overallEndDate.getTime());
+    }
+
+    const periodData = callMetaApi(`${adAccountId}/insights`, { level: 'account', time_range: { 'since': formatDate(periodStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions,spend' });
+    const cumulativeData = callMetaApi(`${adAccountId}/insights`, { level: 'account', time_range: { 'since': formatDate(overallStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions' });
+
+    const periodSpend = parseFloat(periodData?.data?.[0]?.spend || 0);
+    const periodReach = parseInt(periodData?.data?.[0]?.reach || 0);
+    const periodImpressions = parseInt(periodData?.data?.[0]?.impressions || 0);
+    const rollingReach = parseInt(cumulativeData?.data?.[0]?.reach || 0);
+    const cumulativeImpressions = parseInt(cumulativeData?.data?.[0]?.impressions || 0);
+    
+    const periodFrequency = (periodReach > 0) ? (periodImpressions / periodReach) : 0;
+    const periodCPmR = (periodReach > 0) ? ((periodSpend / periodReach) * 1000) : 0; // NEW
+    const periodCPM = (periodImpressions > 0) ? ((periodSpend / periodImpressions) * 1000) : 0;
+    const rollingFrequency = (rollingReach > 0) ? (cumulativeImpressions / rollingReach) : 0;
+    const incrementalReach = rollingReach - previousRollingReach;
+    const cpim = (incrementalReach > 0) ? ((periodSpend / incrementalReach) * 1000) : 0;
+
+    outputSheet.appendRow([periodStartDate, periodEndDate, adAccountId, 'Account Level Total', periodSpend, periodReach, periodImpressions, periodFrequency, periodCPmR, periodCPM, rollingReach, cumulativeImpressions, rollingFrequency, incrementalReach, cpim]);
+    
+    previousRollingReach = rollingReach;
+    Utilities.sleep(500);
+  }
+  
+  const numRows = outputSheet.getLastRow() - 1;
+  if (numRows > 0) {
+    const dataRange = outputSheet.getRange(2, 1, numRows, outputSheet.getLastColumn());
+    // E: Spend, I: CPmR, J: CPM, O: CPiM
+    dataRange.offset(0, 4, numRows, 1).setNumberFormat("$#,##0.00"); // Column E
+    dataRange.offset(0, 8, numRows, 1).setNumberFormat("$#,##0.00"); // Column I
+    dataRange.offset(0, 9, numRows, 1).setNumberFormat("$#,##0.00"); // Column J
+    dataRange.offset(0, 14, numRows, 1).setNumberFormat("$#,##0.00"); // Column O
+  }
+
+  statusCell.setValue('Analysis complete!').setBackground(SUCCESS_COLOR);
+  SpreadsheetApp.getUi().alert('Analysis is complete!');
+}
+
+/**
+ * Performs analysis for a SINGLE SELECTED CAMPAIGN using discrete time intervals.
+ */
+function performCampaignLevelAnalysis(lookbackDays) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const settingsSheet = ss.getSheetByName('Setup');
+  const outputSheet = ss.getSheetByName('DATA_reachTool_flatTable_Output');
+  const statusCell = settingsSheet.getRange('B10');
+  const campaignId = settingsSheet.getRange('B9').getValue();
+  const campaignName = settingsSheet.getRange('B8').getValue();
+  const overallStartDate = new Date(settingsSheet.getRange('B4').getValue());
+  const overallEndDate = new Date(settingsSheet.getRange('B5').getValue());
+
+  if (!campaignId) {
+    throw new Error("No Campaign ID found in cell B9. Please select a campaign from the dropdown in B8 first.");
+  }
+  
+  outputSheet.clearContents();
+  const headers = [['Start Date', 'End Date', 'Campaign ID', 'Campaign Name', 'Period Spend', 'Period Reach', 'Period Impressions', 'Period Frequency', 'Period CPmR', 'Period CPM', 'Rolling Reach', 'Cumulative Impressions', 'Rolling Frequency', 'Incremental Reach', 'CPiM']];
+  outputSheet.getRange('A1:O1').setValues(headers).setFontWeight('bold'); // Expanded to O columns
+
+  let previousRollingReach = 0;
+
+  for (let loopStartDate = new Date(overallStartDate); loopStartDate <= overallEndDate; loopStartDate.setDate(loopStartDate.getDate() + lookbackDays)) {
+    
+    const periodStartDate = new Date(loopStartDate);
+    let periodEndDate = new Date(loopStartDate);
+    periodEndDate.setDate(periodEndDate.getDate() + lookbackDays - 1);
+
+    if (periodEndDate > overallEndDate) {
+      periodEndDate.setTime(overallEndDate.getTime());
+    }
+
+    const periodData = callMetaApi(`${campaignId}/insights`, { time_range: { 'since': formatDate(periodStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions,spend' });
+    const cumulativeData = callMetaApi(`${campaignId}/insights`, { time_range: { 'since': formatDate(overallStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions' });
+
+    const periodSpend = parseFloat(periodData?.data?.[0]?.spend || 0);
+    const periodReach = parseInt(periodData?.data?.[0]?.reach || 0);
+    const periodImpressions = parseInt(periodData?.data?.[0]?.impressions || 0);
+    const rollingReach = parseInt(cumulativeData?.data?.[0]?.reach || 0);
+    const cumulativeImpressions = parseInt(cumulativeData?.data?.[0]?.impressions || 0);
+    
+    const periodFrequency = (periodReach > 0) ? (periodImpressions / periodReach) : 0;
+    const periodCPmR = (periodReach > 0) ? ((periodSpend / periodReach) * 1000) : 0; // NEW
+    const periodCPM = (periodImpressions > 0) ? ((periodSpend / periodImpressions) * 1000) : 0;
+    const rollingFrequency = (rollingReach > 0) ? (cumulativeImpressions / rollingReach) : 0;
+    const incrementalReach = rollingReach - previousRollingReach;
+    const cpim = (incrementalReach > 0) ? ((periodSpend / incrementalReach) * 1000) : 0;
+
+    outputSheet.appendRow([periodStartDate, periodEndDate, campaignId, campaignName, periodSpend, periodReach, periodImpressions, periodFrequency, periodCPmR, periodCPM, rollingReach, cumulativeImpressions, rollingFrequency, incrementalReach, cpim]);
+    
+    previousRollingReach = rollingReach;
+    Utilities.sleep(500);
+  }
+
+  const numRows = outputSheet.getLastRow() - 1;
+  if (numRows > 0) {
+    const dataRange = outputSheet.getRange(2, 1, numRows, outputSheet.getLastColumn());
+    // E: Spend, I: CPmR, J: CPM, O: CPiM
+    dataRange.offset(0, 4, numRows, 1).setNumberFormat("$#,##0.00"); // Column E
+    dataRange.offset(0, 8, numRows, 1).setNumberFormat("$#,##0.00"); // Column I
+    dataRange.offset(0, 9, numRows, 1).setNumberFormat("$#,##0.00"); // Column J
+    dataRange.offset(0, 14, numRows, 1).setNumberFormat("$#,##0.00"); // Column O
+  }
+
+  statusCell.setValue('Analysis complete!').setBackground(SUCCESS_COLOR);
+  SpreadsheetApp.getUi().alert('Analysis is complete!');
+}
+/**
+ * Fetches campaigns with spend from the API.
+ */
+function getCampaignsWithSpend() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const settingsSheet = ss.getSheetByName('Setup');
+  const campaignSheet = ss.getSheetByName('DATA_Campaigns');
+  const statusCell = settingsSheet.getRange('B10');
+
+  try {
+    const adAccountId = settingsSheet.getRange('B2').getValue();
+    const startDate = new Date(settingsSheet.getRange('B4').getValue());
+    const endDate = new Date(settingsSheet.getRange('B5').getValue());
+
+    if (!adAccountId || !startDate || !endDate) {
+      throw new Error("Please fill in Ad Account ID, Start Date, and End Date in the Setup tab.");
+    }
+    statusCell.setValue('Fetching campaigns...').setBackground(PROGRESS_COLOR);
+
+    const apiPath = `${adAccountId}/campaigns`;
+    const apiParams = {
+      time_range: { 'since': formatDate(startDate), 'until': formatDate(endDate) },
+      filtering: [{ 'field': 'spend', 'operator': 'GREATER_THAN', 'value': 0 }],
+      fields: 'name,id',
+      limit: 500
+    };
+
+    const apiResponse = callMetaApi(apiPath, apiParams);
+    
+    campaignSheet.clearContents();
+    campaignSheet.getRange('A1:B1').setValues([['Campaign Name', 'Campaign ID']]).setFontWeight('bold');
+
+    if (apiResponse && apiResponse.data && apiResponse.data.length > 0) {
+      const campaignValues = apiResponse.data.map(campaign => [campaign.name, campaign.id]);
+      campaignSheet.getRange(2, 1, campaignValues.length, 2).setValues(campaignValues);
+      statusCell.setValue(`Found ${campaignValues.length} campaigns. Ready.`).setBackground(SUCCESS_COLOR);
+      ui.alert(`Success! Found and listed ${campaignValues.length} campaigns in the 'DATA_Campaigns' tab.`);
+    } else {
+      statusCell.setValue('Ready. (0 campaigns returned)').setBackground(SUCCESS_COLOR);
+      ui.alert(`API call was successful but returned 0 campaigns.`);
+    }
+
+  } catch (e) {
+    statusCell.setValue('Error!').setBackground(ERROR_COLOR);
+    ui.alert(`An error occurred: ${e.message}`);
+  }
+}
+
+
+// ===================================================================================
+// 3. API & UTILITY FUNCTIONS
+// ===================================================================================
+
+function callMetaApi(path, params) {
+  const accessToken = getUserAccessToken();
+  if (!accessToken) {
+    throw new Error("META Access Token not set. Please run 'Set/Update Access Token' from the menu.");
+  }
+  
+  const baseUrl = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/`;
+  
+  let queryString = Object.entries(params)
+    .map(([key, value]) => {
+      let processedValue;
+      if (typeof value === 'object') {
+        processedValue = JSON.stringify(value);
+      } else {
+        processedValue = value;
+      }
+      return `${encodeURIComponent(key)}=${encodeURIComponent(processedValue)}`;
+    })
+    .join('&');
+
+  const options = {
+    'method': 'get',
+    'contentType': 'application/json',
+    'headers': {
+      'Authorization': `Bearer ${accessToken}`
+    },
+    'muteHttpExceptions': true
+  };
+
+  const url = `${baseUrl}${path}?${queryString}`;
+  Logger.log(`Requesting URL: ${url}`);
+  
+  const response = UrlFetchApp.fetch(url, options);
+  const responseCode = response.getResponseCode();
+  const responseBody = response.getContentText();
+
+  if (responseCode === 200) {
+    return JSON.parse(responseBody);
+  } else {
+    Logger.log(`API Error Response: ${responseBody}`);
+    const error = JSON.parse(responseBody).error;
+    throw new Error(`API Error: ${error.message} (Code: ${error.code})`);
+  }
+}
+
+function showTokenPrompt() {
+  const ui = SpreadsheetApp.getUi();
+  const result = ui.prompt(
+      'Set META Access Token',
+      'Please enter your long-lived META Marketing API user access token:',
+      ui.ButtonSet.OK_CANCEL);
+
+  const button = result.getSelectedButton();
+  const text = result.getResponseText();
+  if (button == ui.Button.OK) {
+    storeUserAccessToken(text);
+    ui.alert('Access token stored successfully.');
+  }
+}
+
+function storeUserAccessToken(token) {
+  PropertiesService.getScriptProperties().setProperty('META_ACCESS_TOKEN', token);
+}
+
+function getUserAccessToken() {
+  return PropertiesService.getScriptProperties().getProperty('META_ACCESS_TOKEN');
+}
+
+function formatDate(date) {
+  return date.toISOString().split('T')[0];
+}
