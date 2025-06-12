@@ -1,3 +1,10 @@
+/**
+ * ===================================================================================
+ * META ADS REACH ANALYSIS TOOL FOR GOOGLE SHEETS USING MARKETING API - v2.2.
+ * A vibe-coded tool built by Kevin Luby (@luby_k) - Director of Ecom, High Camp Flasks
+ * ===================================================================================
+ **/  
+
 // --- SCRIPT PROPERTIES & CONSTANTS ---
 const META_GRAPH_API_VERSION = "v20.0";
 const SUCCESS_COLOR = '#d9ead3'; // Light Green
