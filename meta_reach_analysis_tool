@@ -1,7 +1,8 @@
 /**
  * ===================================================================================
- * META ADS REACH ANALYSIS TOOL FOR GOOGLE SHEETS USING MARKETING API - v2.2.
+ * META ADS REACH ANALYSIS TOOL FOR GOOGLE SHEETS USING MARKETING API - V2.0
  * A vibe-coded tool built by Kevin Luby (@luby_k) - Director of Ecom, High Camp Flasks
+ * V2 Upgrade: Demographic breakdowns, ad-level analysis, 28-day rolling metrics
  * ===================================================================================
  **/  
 
@@ -10,6 +11,22 @@ const META_GRAPH_API_VERSION = "v20.0";
 const SUCCESS_COLOR = '#d9ead3'; // Light Green
 const ERROR_COLOR = '#f4cccc';   // Light Red
 const PROGRESS_COLOR = '#fce5cd'; // Light Orange
+
+// Output sheet names
+const SHEET_ACCOUNT_OUTPUT = 'DATA_Account_Output';
+const SHEET_CAMPAIGN_OUTPUT = 'DATA_Campaign_Output';
+const SHEET_AD_OUTPUT = 'DATA_Ad_Output';
+
+// Demographic age/gender combinations
+const DEMOGRAPHICS = [
+  '13-17_male', '13-17_female', '13-17_unknown',
+  '18-24_male', '18-24_female', '18-24_unknown',
+  '25-34_male', '25-34_female', '25-34_unknown',
+  '35-44_male', '35-44_female', '35-44_unknown',
+  '45-54_male', '45-54_female', '45-54_unknown',
+  '55-64_male', '55-64_female', '55-64_unknown',
+  '65+_male', '65+_female', '65+_unknown'
+];
 
 // ===================================================================================
 // 1. UI & MENU SETUP
@@ -25,13 +42,12 @@ function onOpen() {
     .addToUi();
 }
 
-
 // ===================================================================================
 // 2. MAIN ROUTER & LOGIC FUNCTIONS
 // ===================================================================================
 
 /**
- * Main "router" function. Reads the scope and analysis type and calls the correct logic.
+ * Main "router" function. Reads checkboxes and analysis type, then calls appropriate functions.
  */
 function runAnalysis() {
   const ui = SpreadsheetApp.getUi();
@@ -40,61 +56,93 @@ function runAnalysis() {
   const statusCell = settingsSheet.getRange('B10');
 
   try {
-    const analysisScope = settingsSheet.getRange('B7').getValue();
-    const analysisType = settingsSheet.getRange('B6').getValue();
+    // Read checkbox states
+    const accountChecked = settingsSheet.getRange('B11').isChecked();
+    const campaignChecked = settingsSheet.getRange('B12').isChecked();
+    const adChecked = settingsSheet.getRange('B13').isChecked();
     
-    statusCell.setValue(`Starting: ${analysisType}...`).setBackground(PROGRESS_COLOR);
+    if (!accountChecked && !campaignChecked && !adChecked) {
+      throw new Error("Please check at least one analysis level (Account, Campaign, or Ad) in cells B11-B13.");
+    }
 
+    const analysisType = settingsSheet.getRange('B6').getValue();
+    const isRolling28 = (analysisType === 'Daily with 28-Day Rolling');
+    
     let lookbackDays;
-    switch (analysisType) {
-      case 'Daily':
-        lookbackDays = 1;
-        break;
-      case '7-Day Interval':
-        lookbackDays = 7;
-        break;
-      case '28-Day Interval':
-        lookbackDays = 28;
-        break;
-      default:
-        throw new Error("Please select a valid Analysis Type in cell B6.");
+    if (isRolling28) {
+      lookbackDays = 1; // Force daily for rolling 28
+    } else {
+      switch (analysisType) {
+        case 'Daily':
+          lookbackDays = 1;
+          break;
+        case '7-Day Interval':
+          lookbackDays = 7;
+          break;
+        case '28-Day Interval':
+          lookbackDays = 28;
+          break;
+        default:
+          throw new Error("Please select a valid Analysis Type in cell B6.");
+      }
     }
     
-    if (analysisScope === 'All Campaigns') {
-      performAccountLevelAnalysis(lookbackDays);
-    } else if (analysisScope === 'Specific Campaign') {
-      performCampaignLevelAnalysis(lookbackDays);
-    } else {
-      throw new Error("Please select a valid Analysis Scope in cell B7.");
+    statusCell.setValue(`Starting V2 Analysis: ${analysisType}...`).setBackground(PROGRESS_COLOR);
+    SpreadsheetApp.flush();
+    
+    // Run selected analysis levels
+    if (accountChecked) {
+      statusCell.setValue('Running Account Analysis...').setBackground(PROGRESS_COLOR);
+      SpreadsheetApp.flush();
+      performAccountLevelAnalysis(lookbackDays, isRolling28);
     }
+    
+    if (campaignChecked) {
+      statusCell.setValue('Running Campaign Analysis...').setBackground(PROGRESS_COLOR);
+      SpreadsheetApp.flush();
+      performCampaignLevelAnalysis(lookbackDays, isRolling28);
+    }
+    
+    if (adChecked) {
+      statusCell.setValue('Running Ad Analysis...').setBackground(PROGRESS_COLOR);
+      SpreadsheetApp.flush();
+      performAdLevelAnalysis(lookbackDays, isRolling28);
+    }
+
+    statusCell.setValue('All analyses complete!').setBackground(SUCCESS_COLOR);
+    ui.alert('All selected analyses are complete!');
 
   } catch (e) {
     ui.alert(`An error occurred: ${e.message}`);
     statusCell.setValue('Error!').setBackground(ERROR_COLOR);
+    Logger.log(`Error: ${e.message}\n${e.stack}`);
   }
 }
 
 /**
- * Performs analysis at the ACCOUNT LEVEL using discrete time intervals.
+ * Performs analysis at the ACCOUNT LEVEL with demographic breakdowns.
  */
-function performAccountLevelAnalysis(lookbackDays) {
+function performAccountLevelAnalysis(lookbackDays, isRolling28) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const settingsSheet = ss.getSheetByName('Setup');
-  const outputSheet = ss.getSheetByName('DATA_reachTool_flatTable_Output');
-  const statusCell = settingsSheet.getRange('B10');
+  let outputSheet = ss.getSheetByName(SHEET_ACCOUNT_OUTPUT);
+  
+  // Create output sheet if it doesn't exist
+  if (!outputSheet) {
+    outputSheet = ss.insertSheet(SHEET_ACCOUNT_OUTPUT);
+  }
+  
   const adAccountId = settingsSheet.getRange('B2').getValue();
   const overallStartDate = new Date(settingsSheet.getRange('B4').getValue());
   const overallEndDate = new Date(settingsSheet.getRange('B5').getValue());
 
-  if (!outputSheet) {
-    throw new Error("Could not find the output sheet named 'DATA_reachTool_flatTable_Output'. Please check the sheet name.");
-  }
-
   outputSheet.clearContents();
-  const headers = [['Start Date', 'End Date', 'Campaign ID', 'Campaign Name', 'Period Spend', 'Period Reach', 'Period Impressions', 'Period Frequency', 'Period CPmR', 'Period CPM', 'Rolling Reach', 'Cumulative Impressions', 'Rolling Frequency', 'Incremental Reach', 'CPiM']];
-  outputSheet.getRange('A1:O1').setValues(headers).setFontWeight('bold'); // Expanded to O columns
+  
+  // Set up headers
+  const headers = buildHeaders(isRolling28);
+  outputSheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
 
-  let previousRollingReach = 0;
+  const demographicTracker = {}; // Track previous rolling reach per demographic
 
   for (let loopStartDate = new Date(overallStartDate); loopStartDate <= overallEndDate; loopStartDate.setDate(loopStartDate.getDate() + lookbackDays)) {
     const periodStartDate = new Date(loopStartDate);
@@ -105,50 +153,40 @@ function performAccountLevelAnalysis(lookbackDays) {
       periodEndDate.setTime(overallEndDate.getTime());
     }
 
-    const periodData = callMetaApi(`${adAccountId}/insights`, { level: 'account', time_range: { 'since': formatDate(periodStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions,spend' });
-    const cumulativeData = callMetaApi(`${adAccountId}/insights`, { level: 'account', time_range: { 'since': formatDate(overallStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions' });
-
-    const periodSpend = parseFloat(periodData?.data?.[0]?.spend || 0);
-    const periodReach = parseInt(periodData?.data?.[0]?.reach || 0);
-    const periodImpressions = parseInt(periodData?.data?.[0]?.impressions || 0);
-    const rollingReach = parseInt(cumulativeData?.data?.[0]?.reach || 0);
-    const cumulativeImpressions = parseInt(cumulativeData?.data?.[0]?.impressions || 0);
+    // Process this time period with demographics
+    processTimePeriodWithDemographics(
+      outputSheet,
+      adAccountId,
+      'account',
+      adAccountId,
+      'Account Level Total',
+      periodStartDate,
+      periodEndDate,
+      overallStartDate,
+      lookbackDays,
+      isRolling28,
+      demographicTracker
+    );
     
-    const periodFrequency = (periodReach > 0) ? (periodImpressions / periodReach) : 0;
-    const periodCPmR = (periodReach > 0) ? ((periodSpend / periodReach) * 1000) : 0; // NEW
-    const periodCPM = (periodImpressions > 0) ? ((periodSpend / periodImpressions) * 1000) : 0;
-    const rollingFrequency = (rollingReach > 0) ? (cumulativeImpressions / rollingReach) : 0;
-    const incrementalReach = rollingReach - previousRollingReach;
-    const cpim = (incrementalReach > 0) ? ((periodSpend / incrementalReach) * 1000) : 0;
-
-    outputSheet.appendRow([periodStartDate, periodEndDate, adAccountId, 'Account Level Total', periodSpend, periodReach, periodImpressions, periodFrequency, periodCPmR, periodCPM, rollingReach, cumulativeImpressions, rollingFrequency, incrementalReach, cpim]);
-    
-    previousRollingReach = rollingReach;
     Utilities.sleep(500);
   }
   
-  const numRows = outputSheet.getLastRow() - 1;
-  if (numRows > 0) {
-    const dataRange = outputSheet.getRange(2, 1, numRows, outputSheet.getLastColumn());
-    // E: Spend, I: CPmR, J: CPM, O: CPiM
-    dataRange.offset(0, 4, numRows, 1).setNumberFormat("$#,##0.00"); // Column E
-    dataRange.offset(0, 8, numRows, 1).setNumberFormat("$#,##0.00"); // Column I
-    dataRange.offset(0, 9, numRows, 1).setNumberFormat("$#,##0.00"); // Column J
-    dataRange.offset(0, 14, numRows, 1).setNumberFormat("$#,##0.00"); // Column O
-  }
-
-  statusCell.setValue('Analysis complete!').setBackground(SUCCESS_COLOR);
-  SpreadsheetApp.getUi().alert('Analysis is complete!');
+  applyNumberFormatting(outputSheet, isRolling28);
 }
 
 /**
- * Performs analysis for a SINGLE SELECTED CAMPAIGN using discrete time intervals.
+ * Performs analysis for a SINGLE SELECTED CAMPAIGN with demographic breakdowns.
  */
-function performCampaignLevelAnalysis(lookbackDays) {
+function performCampaignLevelAnalysis(lookbackDays, isRolling28) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const settingsSheet = ss.getSheetByName('Setup');
-  const outputSheet = ss.getSheetByName('DATA_reachTool_flatTable_Output');
-  const statusCell = settingsSheet.getRange('B10');
+  let outputSheet = ss.getSheetByName(SHEET_CAMPAIGN_OUTPUT);
+  
+  // Create output sheet if it doesn't exist
+  if (!outputSheet) {
+    outputSheet = ss.insertSheet(SHEET_CAMPAIGN_OUTPUT);
+  }
+  
   const campaignId = settingsSheet.getRange('B9').getValue();
   const campaignName = settingsSheet.getRange('B8').getValue();
   const overallStartDate = new Date(settingsSheet.getRange('B4').getValue());
@@ -159,13 +197,14 @@ function performCampaignLevelAnalysis(lookbackDays) {
   }
   
   outputSheet.clearContents();
-  const headers = [['Start Date', 'End Date', 'Campaign ID', 'Campaign Name', 'Period Spend', 'Period Reach', 'Period Impressions', 'Period Frequency', 'Period CPmR', 'Period CPM', 'Rolling Reach', 'Cumulative Impressions', 'Rolling Frequency', 'Incremental Reach', 'CPiM']];
-  outputSheet.getRange('A1:O1').setValues(headers).setFontWeight('bold'); // Expanded to O columns
+  
+  // Set up headers
+  const headers = buildHeaders(isRolling28);
+  outputSheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
 
-  let previousRollingReach = 0;
+  const demographicTracker = {}; // Track previous rolling reach per demographic
 
   for (let loopStartDate = new Date(overallStartDate); loopStartDate <= overallEndDate; loopStartDate.setDate(loopStartDate.getDate() + lookbackDays)) {
-    
     const periodStartDate = new Date(loopStartDate);
     let periodEndDate = new Date(loopStartDate);
     periodEndDate.setDate(periodEndDate.getDate() + lookbackDays - 1);
@@ -174,41 +213,443 @@ function performCampaignLevelAnalysis(lookbackDays) {
       periodEndDate.setTime(overallEndDate.getTime());
     }
 
-    const periodData = callMetaApi(`${campaignId}/insights`, { time_range: { 'since': formatDate(periodStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions,spend' });
-    const cumulativeData = callMetaApi(`${campaignId}/insights`, { time_range: { 'since': formatDate(overallStartDate), 'until': formatDate(periodEndDate) }, fields: 'reach,impressions' });
-
-    const periodSpend = parseFloat(periodData?.data?.[0]?.spend || 0);
-    const periodReach = parseInt(periodData?.data?.[0]?.reach || 0);
-    const periodImpressions = parseInt(periodData?.data?.[0]?.impressions || 0);
-    const rollingReach = parseInt(cumulativeData?.data?.[0]?.reach || 0);
-    const cumulativeImpressions = parseInt(cumulativeData?.data?.[0]?.impressions || 0);
+    // Process this time period with demographics
+    processTimePeriodWithDemographics(
+      outputSheet,
+      campaignId,
+      'campaign',
+      campaignId,
+      campaignName,
+      periodStartDate,
+      periodEndDate,
+      overallStartDate,
+      lookbackDays,
+      isRolling28,
+      demographicTracker
+    );
     
-    const periodFrequency = (periodReach > 0) ? (periodImpressions / periodReach) : 0;
-    const periodCPmR = (periodReach > 0) ? ((periodSpend / periodReach) * 1000) : 0; // NEW
-    const periodCPM = (periodImpressions > 0) ? ((periodSpend / periodImpressions) * 1000) : 0;
-    const rollingFrequency = (rollingReach > 0) ? (cumulativeImpressions / rollingReach) : 0;
-    const incrementalReach = rollingReach - previousRollingReach;
-    const cpim = (incrementalReach > 0) ? ((periodSpend / incrementalReach) * 1000) : 0;
-
-    outputSheet.appendRow([periodStartDate, periodEndDate, campaignId, campaignName, periodSpend, periodReach, periodImpressions, periodFrequency, periodCPmR, periodCPM, rollingReach, cumulativeImpressions, rollingFrequency, incrementalReach, cpim]);
-    
-    previousRollingReach = rollingReach;
     Utilities.sleep(500);
   }
-
-  const numRows = outputSheet.getLastRow() - 1;
-  if (numRows > 0) {
-    const dataRange = outputSheet.getRange(2, 1, numRows, outputSheet.getLastColumn());
-    // E: Spend, I: CPmR, J: CPM, O: CPiM
-    dataRange.offset(0, 4, numRows, 1).setNumberFormat("$#,##0.00"); // Column E
-    dataRange.offset(0, 8, numRows, 1).setNumberFormat("$#,##0.00"); // Column I
-    dataRange.offset(0, 9, numRows, 1).setNumberFormat("$#,##0.00"); // Column J
-    dataRange.offset(0, 14, numRows, 1).setNumberFormat("$#,##0.00"); // Column O
-  }
-
-  statusCell.setValue('Analysis complete!').setBackground(SUCCESS_COLOR);
-  SpreadsheetApp.getUi().alert('Analysis is complete!');
+  
+  applyNumberFormatting(outputSheet, isRolling28);
 }
+
+/**
+ * Performs analysis at the AD LEVEL with demographic breakdowns.
+ */
+function performAdLevelAnalysis(lookbackDays, isRolling28) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const settingsSheet = ss.getSheetByName('Setup');
+  let outputSheet = ss.getSheetByName(SHEET_AD_OUTPUT);
+  
+  // Create output sheet if it doesn't exist
+  if (!outputSheet) {
+    outputSheet = ss.insertSheet(SHEET_AD_OUTPUT);
+  }
+  
+  const analysisScope = settingsSheet.getRange('B7').getValue();
+  const overallStartDate = new Date(settingsSheet.getRange('B4').getValue());
+  const overallEndDate = new Date(settingsSheet.getRange('B5').getValue());
+  
+  outputSheet.clearContents();
+  
+  // Set up headers
+  const headers = buildHeaders(isRolling28);
+  outputSheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+
+  let ads = [];
+  
+  if (analysisScope === 'All Campaigns') {
+    // Fetch all ads in the account
+    const adAccountId = settingsSheet.getRange('B2').getValue();
+    ads = fetchAdsWithSpend(adAccountId, 'account', overallStartDate, overallEndDate);
+  } else if (analysisScope === 'Specific Campaign') {
+    // Fetch ads for the selected campaign
+    const campaignId = settingsSheet.getRange('B9').getValue();
+    if (!campaignId) {
+      throw new Error("No Campaign ID found in cell B9. Please select a campaign from the dropdown in B8 first.");
+    }
+    ads = fetchAdsWithSpend(campaignId, 'campaign', overallStartDate, overallEndDate);
+  } else {
+    throw new Error("Please select a valid Analysis Scope in cell B7.");
+  }
+  
+  if (ads.length === 0) {
+    throw new Error("No ads with spend found in the specified date range.");
+  }
+  
+  // Process each ad
+  for (let i = 0; i < ads.length; i++) {
+    const ad = ads[i];
+    const demographicTracker = {}; // Track previous rolling reach per demographic for this ad
+    
+    for (let loopStartDate = new Date(overallStartDate); loopStartDate <= overallEndDate; loopStartDate.setDate(loopStartDate.getDate() + lookbackDays)) {
+      const periodStartDate = new Date(loopStartDate);
+      let periodEndDate = new Date(loopStartDate);
+      periodEndDate.setDate(periodEndDate.getDate() + lookbackDays - 1);
+
+      if (periodEndDate > overallEndDate) {
+        periodEndDate.setTime(overallEndDate.getTime());
+      }
+
+      // Process this time period with demographics for this ad
+      processTimePeriodWithDemographics(
+        outputSheet,
+        ad.id,
+        'ad',
+        ad.id,
+        ad.name,
+        periodStartDate,
+        periodEndDate,
+        overallStartDate,
+        lookbackDays,
+        isRolling28,
+        demographicTracker
+      );
+      
+      Utilities.sleep(500);
+    }
+  }
+  
+  applyNumberFormatting(outputSheet, isRolling28);
+}
+
+// ===================================================================================
+// 3. CORE PROCESSING FUNCTIONS
+// ===================================================================================
+
+/**
+ * Process a single time period with demographic breakdowns
+ */
+function processTimePeriodWithDemographics(
+  outputSheet,
+  entityId,
+  level,
+  levelId,
+  levelName,
+  periodStartDate,
+  periodEndDate,
+  overallStartDate,
+  lookbackDays,
+  isRolling28,
+  demographicTracker
+) {
+  // Fetch period data with demographic breakdowns
+  const periodDataRaw = callMetaApi(`${entityId}/insights`, {
+    level: level === 'account' ? 'account' : undefined,
+    time_range: { 'since': formatDate(periodStartDate), 'until': formatDate(periodEndDate) },
+    fields: 'reach,impressions,spend,actions,action_values',
+    breakdowns: ['age', 'gender']
+  });
+  
+  // Fetch cumulative data with demographic breakdowns
+  const cumulativeDataRaw = callMetaApi(`${entityId}/insights`, {
+    level: level === 'account' ? 'account' : undefined,
+    time_range: { 'since': formatDate(overallStartDate), 'until': formatDate(periodEndDate) },
+    fields: 'reach,impressions',
+    breakdowns: ['age', 'gender']
+  });
+  
+  let rolling28DataRaw = null;
+  let rolling28PrevDataRaw = null;
+  
+  if (isRolling28) {
+    // Calculate 28-day rolling metrics
+    const rolling28StartDate = new Date(periodEndDate);
+    rolling28StartDate.setDate(rolling28StartDate.getDate() - 27); // 28 days total including end date
+    
+    const rolling28PrevEndDate = new Date(periodEndDate);
+    rolling28PrevEndDate.setDate(rolling28PrevEndDate.getDate() - 1);
+    
+    // Y: Current 28-day reach (from date-28 to date)
+    rolling28DataRaw = callMetaApi(`${entityId}/insights`, {
+      level: level === 'account' ? 'account' : undefined,
+      time_range: { 'since': formatDate(rolling28StartDate), 'until': formatDate(periodEndDate) },
+      fields: 'reach',
+      breakdowns: ['age', 'gender']
+    });
+    
+    // X: Previous 28-day reach (from date-28 to date-1)
+    rolling28PrevDataRaw = callMetaApi(`${entityId}/insights`, {
+      level: level === 'account' ? 'account' : undefined,
+      time_range: { 'since': formatDate(rolling28StartDate), 'until': formatDate(rolling28PrevEndDate) },
+      fields: 'reach',
+      breakdowns: ['age', 'gender']
+    });
+    
+    Utilities.sleep(300);
+  }
+  
+  // Parse demographic data
+  const periodData = parseDemographicData(periodDataRaw);
+  const cumulativeData = parseDemographicData(cumulativeDataRaw);
+  const rolling28Data = rolling28DataRaw ? parseDemographicData(rolling28DataRaw) : null;
+  const rolling28PrevData = rolling28PrevDataRaw ? parseDemographicData(rolling28PrevDataRaw) : null;
+  
+  // Calculate totals across all demographics
+  const totalRow = calculateTotalRow(
+    periodData,
+    cumulativeData,
+    rolling28Data,
+    rolling28PrevData,
+    demographicTracker,
+    'TOTAL',
+    periodStartDate,
+    periodEndDate,
+    levelId,
+    levelName,
+    isRolling28
+  );
+  
+  outputSheet.appendRow(totalRow);
+  
+  // Generate rows for each demographic
+  for (const demo of DEMOGRAPHICS) {
+    const demoRow = calculateDemographicRow(
+      periodData,
+      cumulativeData,
+      rolling28Data,
+      rolling28PrevData,
+      demographicTracker,
+      demo,
+      periodStartDate,
+      periodEndDate,
+      levelId,
+      levelName,
+      isRolling28
+    );
+    
+    if (demoRow) {
+      outputSheet.appendRow(demoRow);
+    }
+  }
+}
+
+/**
+ * Parse API response data by demographic
+ */
+function parseDemographicData(apiResponse) {
+  const result = {};
+  
+  if (!apiResponse || !apiResponse.data || apiResponse.data.length === 0) {
+    return result;
+  }
+  
+  for (const item of apiResponse.data) {
+    const age = item.age || 'unknown';
+    const gender = item.gender || 'unknown';
+    const demoKey = `${age}_${gender}`;
+    
+    result[demoKey] = {
+      reach: parseInt(item.reach || 0),
+      impressions: parseInt(item.impressions || 0),
+      spend: parseFloat(item.spend || 0),
+      conversions: getActionValue(item.actions, 'offsite_conversion.fb_pixel_purchase'),
+      revenue: getActionValue(item.action_values, 'offsite_conversion.fb_pixel_purchase')
+    };
+  }
+  
+  return result;
+}
+
+/**
+ * Calculate total row aggregating all demographics
+ */
+function calculateTotalRow(
+  periodData,
+  cumulativeData,
+  rolling28Data,
+  rolling28PrevData,
+  demographicTracker,
+  demographic,
+  periodStartDate,
+  periodEndDate,
+  levelId,
+  levelName,
+  isRolling28
+) {
+  // Aggregate across all demographics
+  let periodSpend = 0, periodReach = 0, periodImpressions = 0, periodConversions = 0, periodRevenue = 0;
+  let rollingReach = 0, cumulativeImpressions = 0;
+  let rolling28Reach = 0, rolling28PrevReach = 0;
+  
+  for (const demo in periodData) {
+    periodSpend += periodData[demo].spend;
+    periodReach += periodData[demo].reach;
+    periodImpressions += periodData[demo].impressions;
+    periodConversions += periodData[demo].conversions;
+    periodRevenue += periodData[demo].revenue;
+  }
+  
+  for (const demo in cumulativeData) {
+    rollingReach += cumulativeData[demo].reach;
+    cumulativeImpressions += cumulativeData[demo].impressions;
+  }
+  
+  if (isRolling28 && rolling28Data && rolling28PrevData) {
+    for (const demo in rolling28Data) {
+      rolling28Reach += rolling28Data[demo].reach;
+    }
+    for (const demo in rolling28PrevData) {
+      rolling28PrevReach += rolling28PrevData[demo].reach;
+    }
+  }
+  
+  // Calculate derived metrics
+  const periodFrequency = periodReach > 0 ? periodImpressions / periodReach : 0;
+  const periodCPM = periodImpressions > 0 ? (periodSpend / periodImpressions) * 1000 : 0;
+  const periodCPMr = periodReach > 0 ? (periodSpend / periodReach) * 1000 : 0;
+  const periodCPA = periodConversions > 0 ? periodSpend / periodConversions : 0;
+  const periodROAS = periodSpend > 0 ? periodRevenue / periodSpend : 0;
+  
+  const rollingFrequency = rollingReach > 0 ? cumulativeImpressions / rollingReach : 0;
+  
+  const previousRollingReach = demographicTracker[demographic] || 0;
+  const incrementalReach = rollingReach - previousRollingReach;
+  const cpim = incrementalReach > 0 ? (periodSpend / incrementalReach) * 1000 : 0;
+  
+  demographicTracker[demographic] = rollingReach;
+  
+  let row = [
+    periodStartDate,
+    periodEndDate,
+    levelId,
+    levelName,
+    demographic,
+    periodSpend,
+    periodReach,
+    periodImpressions,
+    periodConversions,
+    periodRevenue,
+    periodFrequency,
+    periodCPM,
+    periodCPMr,
+    periodCPA,
+    periodROAS,
+    rollingReach,
+    cumulativeImpressions,
+    rollingFrequency,
+    incrementalReach,
+    cpim
+  ];
+  
+  if (isRolling28) {
+    const rolling28IncrementalReach = rolling28Reach - rolling28PrevReach;
+    const rolling28CPMi = rolling28IncrementalReach > 0 ? (periodSpend / rolling28IncrementalReach) * 1000 : 0;
+    
+    row.push(rolling28Reach, rolling28IncrementalReach, rolling28CPMi);
+  }
+  
+  return row;
+}
+
+/**
+ * Calculate row for a specific demographic
+ */
+function calculateDemographicRow(
+  periodData,
+  cumulativeData,
+  rolling28Data,
+  rolling28PrevData,
+  demographicTracker,
+  demographic,
+  periodStartDate,
+  periodEndDate,
+  levelId,
+  levelName,
+  isRolling28
+) {
+  const periodMetrics = periodData[demographic] || { reach: 0, impressions: 0, spend: 0, conversions: 0, revenue: 0 };
+  const cumulativeMetrics = cumulativeData[demographic] || { reach: 0, impressions: 0 };
+  
+  // Skip if no data for this demographic
+  if (periodMetrics.reach === 0 && periodMetrics.impressions === 0 && cumulativeMetrics.reach === 0) {
+    return null;
+  }
+  
+  const periodSpend = periodMetrics.spend;
+  const periodReach = periodMetrics.reach;
+  const periodImpressions = periodMetrics.impressions;
+  const periodConversions = periodMetrics.conversions;
+  const periodRevenue = periodMetrics.revenue;
+  
+  const rollingReach = cumulativeMetrics.reach;
+  const cumulativeImpressions = cumulativeMetrics.impressions;
+  
+  // Calculate derived metrics
+  const periodFrequency = periodReach > 0 ? periodImpressions / periodReach : 0;
+  const periodCPM = periodImpressions > 0 ? (periodSpend / periodImpressions) * 1000 : 0;
+  const periodCPMr = periodReach > 0 ? (periodSpend / periodReach) * 1000 : 0;
+  const periodCPA = periodConversions > 0 ? periodSpend / periodConversions : 0;
+  const periodROAS = periodSpend > 0 ? periodRevenue / periodSpend : 0;
+  
+  const rollingFrequency = rollingReach > 0 ? cumulativeImpressions / rollingReach : 0;
+  
+  const previousRollingReach = demographicTracker[demographic] || 0;
+  const incrementalReach = rollingReach - previousRollingReach;
+  const cpim = incrementalReach > 0 ? (periodSpend / incrementalReach) * 1000 : 0;
+  
+  demographicTracker[demographic] = rollingReach;
+  
+  let row = [
+    periodStartDate,
+    periodEndDate,
+    levelId,
+    levelName,
+    demographic,
+    periodSpend,
+    periodReach,
+    periodImpressions,
+    periodConversions,
+    periodRevenue,
+    periodFrequency,
+    periodCPM,
+    periodCPMr,
+    periodCPA,
+    periodROAS,
+    rollingReach,
+    cumulativeImpressions,
+    rollingFrequency,
+    incrementalReach,
+    cpim
+  ];
+  
+  if (isRolling28) {
+    const rolling28Metrics = rolling28Data && rolling28Data[demographic] ? rolling28Data[demographic] : { reach: 0 };
+    const rolling28PrevMetrics = rolling28PrevData && rolling28PrevData[demographic] ? rolling28PrevData[demographic] : { reach: 0 };
+    
+    const rolling28Reach = rolling28Metrics.reach;
+    const rolling28PrevReach = rolling28PrevMetrics.reach;
+    const rolling28IncrementalReach = rolling28Reach - rolling28PrevReach;
+    const rolling28CPMi = rolling28IncrementalReach > 0 ? (periodSpend / rolling28IncrementalReach) * 1000 : 0;
+    
+    row.push(rolling28Reach, rolling28IncrementalReach, rolling28CPMi);
+  }
+  
+  return row;
+}
+
+/**
+ * Fetch ads with spend for a given entity (account or campaign)
+ */
+function fetchAdsWithSpend(entityId, level, startDate, endDate) {
+  const apiPath = level === 'account' ? `${entityId}/ads` : `${entityId}/ads`;
+  const apiParams = {
+    time_range: { 'since': formatDate(startDate), 'until': formatDate(endDate) },
+    filtering: [{ 'field': 'spend', 'operator': 'GREATER_THAN', 'value': 0 }],
+    fields: 'name,id',
+    limit: 500
+  };
+
+  const apiResponse = callMetaApi(apiPath, apiParams);
+  
+  if (apiResponse && apiResponse.data && apiResponse.data.length > 0) {
+    return apiResponse.data;
+  }
+  
+  return [];
+}
+
 /**
  * Fetches campaigns with spend from the API.
  */
@@ -258,9 +699,91 @@ function getCampaignsWithSpend() {
   }
 }
 
+// ===================================================================================
+// 4. UTILITY FUNCTIONS
+// ===================================================================================
+
+/**
+ * Build header row based on analysis type
+ */
+function buildHeaders(isRolling28) {
+  let headers = [
+    'Start Date',
+    'End Date',
+    'Level ID',
+    'Level Name',
+    'Demographic',
+    'Period Spend',
+    'Period Reach',
+    'Period Impressions',
+    'Period Conversions',
+    'Period Revenue',
+    'Period Frequency',
+    'Period CPM',
+    'Period CPMr',
+    'Period CPA',
+    'Period ROAS',
+    'Rolling Reach',
+    'Cumulative Impressions',
+    'Rolling Frequency',
+    'Incremental Reach',
+    'CPMi'
+  ];
+  
+  if (isRolling28) {
+    headers.push('28-Day Rolling Reach', '28-Day Rolling Incremental Reach', '28-Day CPMi');
+  }
+  
+  return headers;
+}
+
+/**
+ * Apply number formatting to output sheets
+ */
+function applyNumberFormatting(outputSheet, isRolling28) {
+  const numRows = outputSheet.getLastRow() - 1;
+  if (numRows <= 0) return;
+  
+  const dataRange = outputSheet.getRange(2, 1, numRows, outputSheet.getLastColumn());
+  
+  // Column F: Period Spend
+  dataRange.offset(0, 5, numRows, 1).setNumberFormat("$#,##0.00");
+  // Column J: Period Revenue
+  dataRange.offset(0, 9, numRows, 1).setNumberFormat("$#,##0.00");
+  // Column L: Period CPM
+  dataRange.offset(0, 11, numRows, 1).setNumberFormat("$#,##0.00");
+  // Column M: Period CPMr
+  dataRange.offset(0, 12, numRows, 1).setNumberFormat("$#,##0.00");
+  // Column N: Period CPA
+  dataRange.offset(0, 13, numRows, 1).setNumberFormat("$#,##0.00");
+  // Column T: CPMi
+  dataRange.offset(0, 19, numRows, 1).setNumberFormat("$#,##0.00");
+  
+  if (isRolling28) {
+    // Column W: 28-Day CPMi
+    dataRange.offset(0, 22, numRows, 1).setNumberFormat("$#,##0.00");
+  }
+}
+
+/**
+ * Extract action value from actions or action_values array
+ */
+function getActionValue(actionsArray, actionType) {
+  if (!actionsArray || !Array.isArray(actionsArray)) {
+    return 0;
+  }
+  
+  for (const action of actionsArray) {
+    if (action.action_type === actionType) {
+      return parseFloat(action.value || 0);
+    }
+  }
+  
+  return 0;
+}
 
 // ===================================================================================
-// 3. API & UTILITY FUNCTIONS
+// 5. API & AUTH FUNCTIONS
 // ===================================================================================
 
 function callMetaApi(path, params) {
@@ -271,7 +794,15 @@ function callMetaApi(path, params) {
   
   const baseUrl = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/`;
   
-  let queryString = Object.entries(params)
+  // Remove undefined params
+  const cleanParams = {};
+  for (const key in params) {
+    if (params[key] !== undefined) {
+      cleanParams[key] = params[key];
+    }
+  }
+  
+  let queryString = Object.entries(cleanParams)
     .map(([key, value]) => {
       let processedValue;
       if (typeof value === 'object') {
