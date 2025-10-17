@@ -1,0 +1,146 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id // Supabase auth.users.id (UUID)
+  email         String   @unique
+  name          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  ownedAccounts Account[] @relation("AccountOwner")
+  memberships   AccountMember[]
+}
+
+model Account {
+  id            String   @id @default(cuid())
+  name          String
+  ownerId       String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  owner         User     @relation("AccountOwner", fields: [ownerId], references: [id])
+  members       AccountMember[]
+  metaAccounts  MetaAccount[]
+  analyses      Analysis[]
+}
+
+model AccountMember {
+  id            String   @id @default(cuid())
+  accountId     String
+  userId        String
+  invitedAt     DateTime @default(now())
+  
+  account       Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([accountId, userId])
+}
+
+model MetaAccount {
+  id                String   @id @default(cuid())
+  accountId         String
+  metaAccountId     String   // act_XXXX
+  metaAccountName   String?
+  accessToken       String   // Encrypted
+  tokenExpiry       DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  account           Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  analyses          Analysis[]
+  
+  @@unique([accountId, metaAccountId])
+  @@index([accountId])
+}
+
+model Analysis {
+  id                String   @id @default(cuid())
+  accountId         String
+  metaAccountId     String
+  name              String?  // User-provided name
+  level             AnalysisLevel
+  entityId          String?  // Campaign or Ad ID
+  entityName        String?  // Campaign or Ad Name
+  dateStart         DateTime
+  dateEnd           DateTime
+  intervalType      IntervalType
+  includeDemographics Boolean @default(true)
+  status            AnalysisStatus @default(PENDING)
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  completedAt       DateTime?
+  
+  account           Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  metaAccount       MetaAccount @relation(fields: [metaAccountId], references: [id])
+  metrics           AnalysisMetric[]
+  
+  @@index([accountId, status])
+  @@index([metaAccountId])
+}
+
+model AnalysisMetric {
+  id                String   @id @default(cuid())
+  analysisId        String
+  periodStart       DateTime
+  periodEnd         DateTime
+  demographic       String   // 'TOTAL' or '25-34_male', etc.
+  
+  // Core metrics
+  periodSpend       Float
+  periodReach       Int
+  periodImpressions Int
+  periodConversions Int
+  periodRevenue     Float
+  
+  // Calculated metrics
+  periodFrequency   Float
+  periodCPM         Float
+  periodCPMr        Float
+  periodCPA         Float?
+  periodROAS        Float?
+  rollingReach      Int
+  cumulativeImpressions Int
+  rollingFrequency  Float
+  incrementalReach  Int
+  cpim              Float?
+  
+  // 28-day rolling (nullable)
+  rolling28Reach    Int?
+  rolling28IncrementalReach Int?
+  rolling28CPMi     Float?
+  
+  analysis          Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  
+  @@index([analysisId, periodStart])
+  @@index([analysisId, demographic])
+}
+
+enum AnalysisLevel {
+  ACCOUNT
+  CAMPAIGN
+  AD
+}
+
+enum IntervalType {
+  DAILY
+  WEEKLY
+  MONTHLY
+  DAILY_ROLLING_28
+}
+
+enum AnalysisStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
