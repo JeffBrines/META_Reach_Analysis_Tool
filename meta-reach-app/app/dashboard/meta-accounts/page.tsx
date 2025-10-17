@@ -9,8 +9,9 @@ import { Plus, Database, CheckCircle2 } from 'lucide-react';
 export default async function MetaAccountsPage({
   searchParams,
 }: {
-  searchParams: { success?: string; error?: string };
+  searchParams: Promise<{ success?: string; error?: string }>;
 }) {
+  const params = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -62,15 +63,15 @@ export default async function MetaAccountsPage({
       </div>
 
       {/* Success/Error Messages */}
-      {searchParams.success && (
+      {params.success && (
         <div className="mb-6 rounded-md bg-green-50 p-4 text-sm text-green-800">
           <CheckCircle2 className="inline mr-2 h-4 w-4" />
           Meta account(s) connected successfully!
         </div>
       )}
-      {searchParams.error && (
+      {params.error && (
         <div className="mb-6 rounded-md bg-red-50 p-4 text-sm text-red-800">
-          Error connecting Meta account: {searchParams.error}
+          Error connecting Meta account: {params.error}
         </div>
       )}
 
